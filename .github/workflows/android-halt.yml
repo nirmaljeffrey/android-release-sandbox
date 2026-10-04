@@ -1,24 +1,28 @@
 # Big red button. Open to anyone with repo access: stopping a rollout is always safe.
 name: "Android · HALT rollout"
+run-name: "Android · HALT rollout${{ inputs.app && format(' · {0}', inputs.app) || '' }}"
 
 on:
   workflow_dispatch:
     inputs:
+      app:
+        description: "App id from release-bot.yml (leave empty if only one app is configured)"
+        required: false
+        type: string
       reason:
         description: "Why? (posted to Slack)"
         required: true
         type: string
 
-# Own group so a halt never waits behind a queued rollout step.
 concurrency:
-  group: android-release-halt
+  group: android-release-halt-${{ inputs.app || 'app' }}
   cancel-in-progress: false
 
 permissions:
   contents: read
   id-token: write
 
-# Sandbox switches (unset in production). See README → Sandbox.
+# Sandbox switches (unset in production). See README → Try it.
 env:
   RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
   MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
@@ -28,9 +32,26 @@ env:
   SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
 
 jobs:
-  halt:
+  resolve:
+    name: Resolve app
+
     runs-on: ubuntu-latest
-    environment: play-production
+    outputs:
+      app: ${{ steps.app.outputs.app }}
+      environment: ${{ steps.app.outputs.environment }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/release-bot-setup
+      - id: app
+        uses: ./.github/actions/resolve-app
+        with:
+          app: ${{ inputs.app }}
+
+  act:
+    name: ${{ needs.resolve.outputs.app }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.environment }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/release-bot-setup
@@ -41,11 +62,14 @@ jobs:
         uses: ./.github/actions/mock-state
         with:
           mode: restore
+          app: ${{ needs.resolve.outputs.app }}
       - env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          APP: ${{ needs.resolve.outputs.app }}
           REASON: ${{ inputs.reason }}
-        run: python -m release_bot halt --reason "$REASON"
+        run: python -m release_bot --app "$APP" halt --reason "$REASON"
       - if: always() && env.RELEASE_BOT_MOCK == 'true'
         uses: ./.github/actions/mock-state
         with:
           mode: save
+          app: ${{ needs.resolve.outputs.app }}

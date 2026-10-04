@@ -1,6 +1,6 @@
-# Health gate between rollout steps. Halts automatically on hard signals.
+# Health gate between rollout steps, for every app. Halts automatically on hard signals.
 # Runs every 3 hours, and immediately when Grafana fires a release alert
-# (repository_dispatch type "rollout-alert" — see README).
+# (repository_dispatch type "rollout-alert", optional client_payload.app — see docs).
 name: "Android · Health check"
 
 on:
@@ -10,20 +10,20 @@ on:
     types: [rollout-alert]
   workflow_dispatch:
     inputs:
+      app:
+        description: "Only this app (empty = all apps)"
+        required: false
+        type: string
       dry_run:
         description: "Check and report only — change nothing on Play"
         type: boolean
         default: false
 
-concurrency:
-  group: android-release
-  cancel-in-progress: false
-
 permissions:
   contents: read
   id-token: write
 
-# Sandbox switches (unset in production). See README → Sandbox.
+# Sandbox switches (unset in production). See README → Try it.
 env:
   RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
   MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
@@ -33,9 +33,38 @@ env:
   SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
 
 jobs:
-  check:
+  plan:
+    name: Which apps
+    # Scheduled runs stay idle until the repo is configured (or in mock mode).
+    if: github.event_name != 'schedule' || vars.RELEASE_BOT_ENABLED == 'true' || vars.RELEASE_BOT_MOCK == 'true'
     runs-on: ubuntu-latest
-    environment: play-production
+    outputs:
+      apps: ${{ steps.apps.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/release-bot-setup
+      - id: apps
+        env:
+          ONLY: ${{ inputs.app || github.event.client_payload.app || '' }}
+        run: |
+          apps=$(python -m release_bot apps)
+          if [ -n "$ONLY" ]; then apps=$(echo "$apps" | jq -c --arg a "$ONLY" '[.[] | select(.app == $a)]'); fi
+          [ "$apps" != "[]" ] || { echo "::error::no app matches '$ONLY'"; exit 1; }
+          echo "apps=$apps" >> "$GITHUB_OUTPUT"
+
+  run:
+    name: ${{ matrix.app }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.apps) }}
+    runs-on: ubuntu-latest
+    environment: ${{ matrix.environment }}
+    # One queue per app: a slow or halted app never blocks the others.
+    concurrency:
+      group: android-release-${{ matrix.app }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/release-bot-setup
@@ -46,7 +75,9 @@ jobs:
         uses: ./.github/actions/mock-state
         with:
           mode: restore
+          app: ${{ matrix.app }}
       - env:
+          APP: ${{ matrix.app }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           GRAFANA_URL: ${{ vars.GRAFANA_URL }}
           GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
@@ -54,8 +85,9 @@ jobs:
           # The webhook payload is only used as a label. The halt decision is
           # always made from real data, so a forged call can at most run a check.
           TRIGGER: ${{ github.event_name == 'repository_dispatch' && format('Grafana alert {0}', github.event.client_payload.alertname) || '' }}
-        run: python -m release_bot $DRY_RUN check --trigger "$TRIGGER"
+        run: python -m release_bot --app "$APP" $DRY_RUN check --trigger "$TRIGGER"
       - if: always() && env.RELEASE_BOT_MOCK == 'true'
         uses: ./.github/actions/mock-state
         with:
           mode: save
+          app: ${{ matrix.app }}

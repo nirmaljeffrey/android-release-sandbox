@@ -1,12 +1,17 @@
-# Thursday, after the smoke test: the on-duty @android-release-hero runs this
+# Release day, after the smoke test: the on-duty @android-release-hero runs this
 # from the Actions tab ("Run workflow", branch: main).
 name: "Android · Submit to Play"
+run-name: "Submit ${{ inputs.app && format('{0} ', inputs.app) || '' }}${{ inputs.tag }}"
 
 on:
   workflow_dispatch:
     inputs:
+      app:
+        description: "App id from release-bot.yml (leave empty if only one app is configured)"
+        required: false
+        type: string
       tag:
-        description: "Release tag created by CI, e.g. v4.12.0"
+        description: "Release tag created by CI, e.g. v4.12.0 (or shop/v4.12.0 with a tag_prefix)"
         required: true
         type: string
       whats_new:
@@ -14,18 +19,18 @@ on:
         required: false
         type: string
       supersede_unfinished_rollout:
-        description: "Last week's release isn't at 100% yet. Replace it anyway?"
+        description: "Last release isn't at 100% yet. Replace it anyway?"
         type: boolean
         default: false
 
 concurrency:
-  group: android-release
+  group: android-release-${{ inputs.app || 'app' }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
-# Sandbox switches (unset in production). See README → Sandbox.
+# Sandbox switches (unset in production). See README → Try it.
 env:
   RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
   MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
@@ -35,19 +40,38 @@ env:
   SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
 
 jobs:
+  resolve:
+    name: Resolve app + tag
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.app.outputs.app }}
+      environment: ${{ steps.app.outputs.environment }}
+      signing_environment: ${{ steps.app.outputs.signing_environment }}
+      repository: ${{ steps.app.outputs.repository }}
+      version: ${{ steps.app.outputs.version }}
+      tag_pattern: ${{ steps.app.outputs.tag_pattern }}
+      project_dir: ${{ steps.app.outputs.project_dir }}
+      bundle_task: ${{ steps.app.outputs.bundle_task }}
+      aab_glob: ${{ steps.app.outputs.aab_glob }}
+      java_version: ${{ steps.app.outputs.java_version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/release-bot-setup
+      - id: app
+        uses: ./.github/actions/resolve-app
+        with:
+          app: ${{ inputs.app }}
+          tag: ${{ inputs.tag }}
+
   preflight:
     name: Release hero + previous rollout check
+    needs: resolve
     runs-on: ubuntu-latest
-    environment: play-production
+    environment: ${{ needs.resolve.outputs.environment }}
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Validate tag format
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not a vX.Y.Z tag"; exit 1; }
       - uses: actions/checkout@v7
       - uses: ./.github/actions/release-bot-setup
         with:
@@ -57,38 +81,44 @@ jobs:
         uses: ./.github/actions/mock-state
         with:
           mode: restore
+          app: ${{ needs.resolve.outputs.app }}
       - name: Only the on-duty @android-release-hero may submit
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        run: python -m release_bot authorize --actor "$GITHUB_ACTOR"
+          APP: ${{ needs.resolve.outputs.app }}
+        run: python -m release_bot --app "$APP" authorize --actor "$GITHUB_ACTOR"
       - name: Previous rollout finished?
         env:
+          APP: ${{ needs.resolve.outputs.app }}
           FORCE: ${{ inputs.supersede_unfinished_rollout && '--force' || '' }}
-        run: python -m release_bot precheck-submit $FORCE
+        run: python -m release_bot --app "$APP" precheck-submit $FORCE
 
   build:
     name: Build signed .aab from tag
-    needs: preflight
+    needs: [resolve, preflight]
     runs-on: ubuntu-latest
-    # Only the upload key lives here — this job never sees Play credentials.
-    environment: android-signing
+    # Only the upload key lives here: this job never sees Play credentials.
+    environment: ${{ needs.resolve.outputs.signing_environment }}
     permissions:
       contents: read
     defaults:
       run:
-        working-directory: ${{ vars.ANDROID_PROJECT_DIR || '.' }}
+        working-directory: ${{ needs.resolve.outputs.project_dir }}
     steps:
       - uses: actions/checkout@v7
         with:
+          repository: ${{ needs.resolve.outputs.repository || github.repository }}
           ref: refs/tags/${{ inputs.tag }}
+          # Apps in another repo need RELEASE_BOT_REPO_TOKEN (see docs/multi-app.md).
+          token: ${{ secrets.RELEASE_BOT_REPO_TOKEN || github.token }}
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: ${{ vars.ANDROID_JAVA_VERSION || '17' }}
+          java-version: ${{ needs.resolve.outputs.java_version }}
           cache: gradle
       - name: Build release bundle
         env:
-          BUNDLE_TASK: ${{ vars.ANDROID_BUNDLE_TASK || ':app:bundleRelease' }}
+          BUNDLE_TASK: ${{ needs.resolve.outputs.bundle_task }}
           KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
@@ -107,14 +137,14 @@ jobs:
           elif [ "$RELEASE_BOT_MOCK" = "true" ]; then
             echo "::warning::No upload keystore configured; building an unsigned bundle (sandbox only)."
           else
-            echo "::error::ANDROID_UPLOAD_KEYSTORE_BASE64 is not set for the android-signing environment."
+            echo "::error::ANDROID_UPLOAD_KEYSTORE_BASE64 is not set in the signing environment."
             exit 1
           fi
           ./gradlew "$BUNDLE_TASK" --no-daemon "${signing[@]}"
           rm -f "$RUNNER_TEMP/upload.jks"
       - name: Locate bundle
         env:
-          AAB_GLOB: ${{ vars.ANDROID_AAB_GLOB || 'app/build/outputs/bundle/release/*.aab' }}
+          AAB_GLOB: ${{ needs.resolve.outputs.aab_glob }}
         run: |
           shopt -s nullglob
           files=($AAB_GLOB)
@@ -128,7 +158,7 @@ jobs:
 
   release-notes:
     name: GitHub release notes
-    needs: preflight
+    needs: [resolve, preflight]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -137,30 +167,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          repository: ${{ needs.resolve.outputs.repository || github.repository }}
+          token: ${{ secrets.RELEASE_BOT_REPO_TOKEN || github.token }}
           fetch-depth: 0
-      - uses: ./.github/actions/release-bot-setup
       - id: notes
-        name: Generate notes since the previous tag
+        name: Generate notes since the previous tag of this app
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_REPO_TOKEN || github.token }}
+          REPO: ${{ needs.resolve.outputs.repository || github.repository }}
           TAG: ${{ inputs.tag }}
+          PATTERN: ${{ needs.resolve.outputs.tag_pattern }}
         run: |
-          prev=$(python -m release_bot previous-tag --tag "$TAG")
+          prev=$(git tag --list "$PATTERN" --sort=-v:refname | grep -x -A1 -F "$TAG" | sed -n 2p || true)
           args=(-f tag_name="$TAG")
           [ -n "$prev" ] && args+=(-f previous_tag_name="$prev")
-          body=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" "${args[@]}" --jq .body)
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --notes "$body"
+          body=$(gh api "repos/$REPO/releases/generate-notes" "${args[@]}" --jq .body)
+          if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$REPO" --notes "$body"
           else
-            gh release create "$TAG" --verify-tag --title "$TAG" --notes "$body"
+            gh release create "$TAG" -R "$REPO" --verify-tag --title "$TAG" --notes "$body"
           fi
-          echo "url=$(gh release view "$TAG" --json url --jq .url)" >> "$GITHUB_OUTPUT"
+          echo "url=$(gh release view "$TAG" -R "$REPO" --json url --jq .url)" >> "$GITHUB_OUTPUT"
 
   publish:
     name: Upload to Play at initial rollout
-    needs: [build, release-notes]
+    needs: [resolve, build, release-notes]
     runs-on: ubuntu-latest
-    environment: play-production
+    environment: ${{ needs.resolve.outputs.environment }}
     permissions:
       contents: write
       id-token: write
@@ -174,28 +207,32 @@ jobs:
         uses: ./.github/actions/mock-state
         with:
           mode: restore
+          app: ${{ needs.resolve.outputs.app }}
       - uses: actions/download-artifact@v8
         with:
           name: aab
           path: ${{ runner.temp }}
       - name: Attach .aab to the GitHub release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_REPO_TOKEN || github.token }}
+          REPO: ${{ needs.resolve.outputs.repository || github.repository }}
           TAG: ${{ inputs.tag }}
-        run: gh release upload "$TAG" "$RUNNER_TEMP/app-release.aab" --clobber
+        run: gh release upload "$TAG" "$RUNNER_TEMP/app-release.aab" -R "$REPO" --clobber
       - name: Submit to Play
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          TAG: ${{ inputs.tag }}
+          APP: ${{ needs.resolve.outputs.app }}
+          VERSION: ${{ needs.resolve.outputs.version }}
           WHATS_NEW: ${{ inputs.whats_new }}
           RELEASE_URL: ${{ needs.release-notes.outputs.url }}
         run: |
-          python -m release_bot submit \
+          python -m release_bot --app "$APP" submit \
             --aab "$RUNNER_TEMP/app-release.aab" \
-            --version "${TAG#v}" \
+            --version "$VERSION" \
             --notes "$WHATS_NEW" \
             --release-url "$RELEASE_URL"
       - if: always() && env.RELEASE_BOT_MOCK == 'true'
         uses: ./.github/actions/mock-state
         with:
           mode: save
+          app: ${{ needs.resolve.outputs.app }}

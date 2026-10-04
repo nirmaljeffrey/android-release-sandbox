@@ -1,6 +1,6 @@
-# Moves the staged rollout one step per run, only when health is green:
-#   Mon → 20%, Tue → 50%, Wed → 100%   (targets live in release-bot.yml)
-# Each run takes ~1 minute: read Play, check health, write Play, exit.
+# Moves each app's staged rollout one step per run, only when health is green:
+#   e.g. Mon → 20%, Tue → 50%, Wed → 100%   (targets live in release-bot.yml, per app)
+# Each run takes ~1 minute per app: read Play, check health, write Play, exit.
 # Play itself holds the rollout state between runs.
 name: "Android · Rollout step"
 
@@ -9,20 +9,20 @@ on:
     - cron: "5,35 * * * *"   # SANDBOX: every 30 min (production: "0 7 * * 1-3")
   workflow_dispatch:
     inputs:
+      app:
+        description: "Only this app (empty = all apps)"
+        required: false
+        type: string
       dry_run:
         description: "Check and report only — change nothing on Play"
         type: boolean
         default: false
 
-concurrency:
-  group: android-release
-  cancel-in-progress: false
-
 permissions:
   contents: read
   id-token: write
 
-# Sandbox switches (unset in production). See README → Sandbox.
+# Sandbox switches (unset in production). See README → Try it.
 env:
   RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
   MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
@@ -32,9 +32,38 @@ env:
   SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
 
 jobs:
-  advance:
+  plan:
+    name: Which apps
+    # Scheduled runs stay idle until the repo is configured (or in mock mode).
+    if: github.event_name != 'schedule' || vars.RELEASE_BOT_ENABLED == 'true' || vars.RELEASE_BOT_MOCK == 'true'
     runs-on: ubuntu-latest
-    environment: play-production
+    outputs:
+      apps: ${{ steps.apps.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/release-bot-setup
+      - id: apps
+        env:
+          ONLY: ${{ inputs.app || github.event.client_payload.app || '' }}
+        run: |
+          apps=$(python -m release_bot apps)
+          if [ -n "$ONLY" ]; then apps=$(echo "$apps" | jq -c --arg a "$ONLY" '[.[] | select(.app == $a)]'); fi
+          [ "$apps" != "[]" ] || { echo "::error::no app matches '$ONLY'"; exit 1; }
+          echo "apps=$apps" >> "$GITHUB_OUTPUT"
+
+  run:
+    name: ${{ matrix.app }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.apps) }}
+    runs-on: ubuntu-latest
+    environment: ${{ matrix.environment }}
+    # One queue per app: a slow or halted app never blocks the others.
+    concurrency:
+      group: android-release-${{ matrix.app }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/release-bot-setup
@@ -45,13 +74,17 @@ jobs:
         uses: ./.github/actions/mock-state
         with:
           mode: restore
+          app: ${{ matrix.app }}
       - env:
+          APP: ${{ matrix.app }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           GRAFANA_URL: ${{ vars.GRAFANA_URL }}
           GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
-        run: python -m release_bot $DRY_RUN advance
+
+        run: python -m release_bot --app "$APP" $DRY_RUN advance
       - if: always() && env.RELEASE_BOT_MOCK == 'true'
         uses: ./.github/actions/mock-state
         with:
           mode: save
+          app: ${{ matrix.app }}

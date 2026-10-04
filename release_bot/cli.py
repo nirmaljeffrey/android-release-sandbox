@@ -9,6 +9,10 @@
   authorize         is this GitHub user the on-duty @android-release-hero?
   vitals            print raw Play Vitals per versionCode (compare with Play Console)
   mock-inject       sandbox only: inject an incident into the mock health data
+  apps              JSON list of configured apps (for workflow matrices)
+  app-info          resolve one app + tag into workflow outputs
+
+Every command takes --app <id> when release-bot.yml defines several apps.
 """
 
 import argparse
@@ -45,15 +49,15 @@ def mock_mode() -> bool:
 
 def build_mock_deps(cfg: dict, dry_run: bool) -> Deps:
     from release_bot import mock
-    store = mock.MockStore()
-    h = cfg["health"]
+    store = mock.MockStore(app_id=cfg.get("app_id", "app"))
     return Deps(
         cfg=cfg,
         play=mock.MockPlay(store, dry_run),
         slack=Slack(os.environ.get("SLACK_BOT_TOKEN"), cfg["slack"]["channel_id"], dry_run=dry_run),
-        vitals=mock.MockVitals(store) if h["play_vitals"]["enabled"] else None,
-        crashlytics=mock.MockCrashlytics(store) if h["crashlytics"]["enabled"] else None,
-        grafana=mock.MockGrafana(store) if h["grafana"]["enabled"] else None,
+        # The demo always shows every source, whatever release-bot.yml enables.
+        vitals=mock.MockVitals(store),
+        crashlytics=mock.MockCrashlytics(store),
+        grafana=mock.MockGrafana(store),
         store=store,
         on_duty_logins=mock.on_duty_logins(),
     )
@@ -115,6 +119,17 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _name(deps: Deps) -> str:
+    """'Android' for a single-app setup, 'Shop Android' when several apps share the bot."""
+    return deps.cfg.get("display_name", "Android")
+
+
+def _key(deps: Deps, version: str) -> str:
+    """Slack thread key: the version, prefixed by the app id in multi-app setups."""
+    app_id = deps.cfg.get("app_id", config_mod.LEGACY_APP_ID)
+    return version if app_id == config_mod.LEGACY_APP_ID else f"{app_id} {version}"
+
+
 def _mention(cfg: dict) -> str:
     group = cfg["slack"].get("hero_usergroup_id")
     return f"<!subteam^{group}> " if group else ""
@@ -169,13 +184,13 @@ def cmd_submit(deps: Deps, args) -> int:
     notes = (args.notes or "").strip() or p["default_release_notes"]
     fraction = p["initial_fraction"]
     code = deps.play.upload_and_start(args.aab, args.version, fraction, notes, p["release_notes_language"])
-    root = (f"🚀 Android *{args.version}* (versionCode {code}) submitted to Play review. "
+    root = (f"🚀 {_name(deps)} *{args.version}* (versionCode {code}) submitted to Play review. "
             f"Rollout starts at {fraction:.0%} once Google approves.")
     if args.release_url:
         root += f"\nRelease notes: {args.release_url}"
     plan = plan_text(deps.cfg)
-    deps.slack.post(args.version, f"Submitted. I'll keep checking health and step the rollout: {plan}.", root_text=root)
-    _announce(deps, f"📦 Android *{args.version}* is in Play review. Staged rollout: "
+    deps.slack.post(_key(deps, args.version), f"Submitted. I'll keep checking health and step the rollout: {plan}.", root_text=root)
+    _announce(deps, f"📦 {_name(deps)} *{args.version}* is in Play review. Staged rollout: "
                     f"{fraction:.0%} after approval → {plan}.")
     return 0
 
@@ -193,17 +208,17 @@ def cmd_check(deps: Deps, args) -> int:
     if verdict.level == Level.HALT:
         deps.play.halt()
         pct = f"{live.get('userFraction', 0):.0%}"
-        deps.slack.post(version, f"🛑 {_mention(deps.cfg)}*Rollout HALTED* at {pct}.{trigger}\n{verdict.scorecard()}\n"
+        deps.slack.post(_key(deps, version), f"🛑 {_mention(deps.cfg)}*Rollout HALTED* at {pct}.{trigger}\n{verdict.scorecard()}\n"
                                  "Fix forward with a new build, or run *Android · Resume* if this was a false alarm.")
-        _alert(deps, f"🛑 Android {version} rollout auto-halted at {pct}.{trigger}\n{verdict.scorecard()}")
-        _announce(deps, f"🛑 Android *{version}* rollout halted at {pct} while we investigate.")
+        _alert(deps, f"🛑 {_name(deps)} {version} rollout auto-halted at {pct}.{trigger}\n{verdict.scorecard()}")
+        _announce(deps, f"🛑 {_name(deps)} *{version}* rollout halted at {pct} while we investigate.")
     elif verdict.level == Level.HOLD:
         # Runs every 3h: only speak up when the picture changed since the last post.
-        if deps.slack.thread_contains(version, verdict.scorecard()):
+        if deps.slack.thread_contains(_key(deps, version), verdict.scorecard()):
             print("Same warning already posted; staying quiet.")
             return 0
-        deps.slack.post(version, f"⚠️ Health needs a human look.{trigger}\n{verdict.scorecard()}")
-        _alert(deps, f"⚠️ {_mention(deps.cfg)}Android {version} health needs a look.{trigger}\n{verdict.scorecard()}")
+        deps.slack.post(_key(deps, version), f"⚠️ Health needs a human look.{trigger}\n{verdict.scorecard()}")
+        _alert(deps, f"⚠️ {_mention(deps.cfg)}{_name(deps)} {version} health needs a look.{trigger}\n{verdict.scorecard()}")
     return 0
 
 
@@ -215,12 +230,14 @@ def cmd_advance(deps: Deps, args) -> int:
         return 0
     version = live.get("name", "?")
     if live["status"] == "halted":
-        deps.slack.post(version, "⏸ Still halted — not advancing. Resume manually when it's safe.")
+        deps.slack.post(_key(deps, version), "⏸ Still halted — not advancing. Resume manually when it's safe.")
         return 0
 
     current = live.get("userFraction", 1.0)
     now = utcnow()
     target = schedule.target_for(now, cfg["rollout"]["targets"], cfg["timezone"])
+    if deps.store is not None:
+        target = 1.0  # mock mode: every "Rollout step" run moves one step, any day of the week
     nxt = schedule.next_fraction(current, cfg["rollout"]["steps"], target)
     if nxt is None:
         print(f"At {current:.0%}; today's target is {target}. Nothing to do.")
@@ -230,17 +247,17 @@ def cmd_advance(deps: Deps, args) -> int:
     print(verdict.scorecard())
     if verdict.level == Level.HALT:
         deps.play.halt()
-        deps.slack.post(version, f"🛑 {_mention(cfg)}*Rollout HALTED* instead of moving to {nxt:.0%}.\n{verdict.scorecard()}")
-        _alert(deps, f"🛑 Android {version} rollout auto-halted at {current:.0%}.\n{verdict.scorecard()}")
-        _announce(deps, f"🛑 Android *{version}* rollout halted at {current:.0%} while we investigate.")
+        deps.slack.post(_key(deps, version), f"🛑 {_mention(cfg)}*Rollout HALTED* instead of moving to {nxt:.0%}.\n{verdict.scorecard()}")
+        _alert(deps, f"🛑 {_name(deps)} {version} rollout auto-halted at {current:.0%}.\n{verdict.scorecard()}")
+        _announce(deps, f"🛑 {_name(deps)} *{version}* rollout halted at {current:.0%} while we investigate.")
     elif verdict.level in (Level.HOLD, Level.NOT_ENOUGH_DATA):
-        deps.slack.post(version, f"⏸ {_mention(cfg)}Holding at {current:.0%} (planned {nxt:.0%}).\n{verdict.scorecard()}")
+        deps.slack.post(_key(deps, version), f"⏸ {_mention(cfg)}Holding at {current:.0%} (planned {nxt:.0%}).\n{verdict.scorecard()}")
     else:
         deps.play.set_fraction(nxt)
         label = "100% — fully released 🎉" if nxt >= 1.0 else f"{nxt:.0%}"
-        deps.slack.post(version, f"⬆️ Rollout {current:.0%} → {label}\n{verdict.scorecard()}")
+        deps.slack.post(_key(deps, version), f"⬆️ Rollout {current:.0%} → {label}\n{verdict.scorecard()}")
         if nxt >= 1.0:
-            _announce(deps, f"🎉 Android *{version}* is fully released to 100% of users.")
+            _announce(deps, f"🎉 {_name(deps)} *{version}* is fully released to 100% of users.")
     return 0
 
 
@@ -248,16 +265,16 @@ def cmd_halt(deps: Deps, args) -> int:
     release = deps.play.halt()
     who = os.environ.get("GITHUB_ACTOR", "someone")
     version = release.get("name", "?")
-    deps.slack.post(version, f"🛑 {_mention(deps.cfg)}Halted manually by {who}. Reason: {args.reason or 'n/a'}")
-    _alert(deps, f"🛑 Android {version} rollout halted manually by {who}. Reason: {args.reason or 'n/a'}")
-    _announce(deps, f"🛑 Android *{version}* rollout halted while we investigate.")
+    deps.slack.post(_key(deps, version), f"🛑 {_mention(deps.cfg)}Halted manually by {who}. Reason: {args.reason or 'n/a'}")
+    _alert(deps, f"🛑 {_name(deps)} {version} rollout halted manually by {who}. Reason: {args.reason or 'n/a'}")
+    _announce(deps, f"🛑 {_name(deps)} *{version}* rollout halted while we investigate.")
     return 0
 
 
 def cmd_resume(deps: Deps, args) -> int:
     release = deps.play.resume()
     who = os.environ.get("GITHUB_ACTOR", "someone")
-    deps.slack.post(release.get("name", "?"),
+    deps.slack.post(_key(deps, release.get("name", "?")),
                     f"▶️ Resumed by {who} at {release.get('userFraction', 0):.0%}. Reason: {args.reason or 'n/a'}")
     return 0
 
@@ -306,12 +323,39 @@ def cmd_mock_inject(deps: Deps, args) -> int:
         who = os.environ.get("GITHUB_ACTOR", "someone")
         text = ("🧪 Mock incidents cleared" if args.incident == "none"
                 else f"🧪 Mock incident injected by {who}: `{args.incident}`. Health check runs next.")
-        deps.slack.post(live.get("name", "?"), text)
+        deps.slack.post(_key(deps, live.get("name", "?")), text)
     return 0
 
 
 def cmd_vitals(deps: Deps, args) -> int:
     print(json.dumps(deps.vitals.latest_by_version(), indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_app_info(deps: Deps, args) -> int:
+    """Workflow outputs for one app + tag (`key=value` lines for $GITHUB_OUTPUT)."""
+    cfg = deps.cfg
+    try:
+        version = config_mod.version_from_tag(cfg, args.tag) if args.tag else ""
+    except config_mod.ConfigError as e:
+        print(f"::error::{e}")
+        return 1
+    out = {
+        "app": cfg["app_id"],
+        "name": cfg["display_name"],
+        "environment": cfg["environment"],
+        "signing_environment": cfg["signing_environment"],
+        "repository": cfg["repository"],
+        "package_name": cfg["package_name"],
+        "version": version,
+        "tag_pattern": cfg["tag_pattern"],
+        "project_dir": cfg["build"]["project_dir"],
+        "bundle_task": cfg["build"]["bundle_task"],
+        "aab_glob": cfg["build"]["aab_glob"],
+        "java_version": str(cfg["build"]["java_version"]),
+    }
+    for k, v in out.items():
+        print(f"{k}={v}")
     return 0
 
 
@@ -327,6 +371,7 @@ COMMANDS = {
     "vitals": cmd_vitals,
     "previous-tag": cmd_previous_tag,
     "mock-inject": cmd_mock_inject,
+    "app-info": cmd_app_info,
 }
 
 NEEDS_HEALTH = {"check", "advance", "vitals"}
@@ -336,6 +381,7 @@ def parse_args(argv):
     ap = argparse.ArgumentParser(prog="release_bot")
     ap.add_argument("--config", default=str(config_mod.DEFAULT_PATH))
     ap.add_argument("--dry-run", action="store_true", help="read everything, change nothing on Play")
+    ap.add_argument("--app", default=None, help="app id from release-bot.yml (needed when several apps are configured)")
     sub = ap.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
     sub.add_parser("precheck-submit").add_argument("--force", action="store_true")
@@ -353,13 +399,33 @@ def parse_args(argv):
     sub.add_parser("previous-tag").add_argument("--tag", required=True)
     from release_bot.mock import INCIDENTS
     sub.add_parser("mock-inject").add_argument("--incident", required=True, choices=sorted(INCIDENTS))
+    sub.add_parser("apps")
+    sub.add_parser("app-info").add_argument("--tag", default="")
     return ap.parse_args(argv)
+
+
+def cmd_apps(raw: dict) -> int:
+    """JSON matrix of every app: [{"app", "environment", "account"}]."""
+    rows = []
+    for app_id in config_mod.app_ids(raw):
+        cfg = config_mod.resolve(raw, app_id)
+        rows.append({"app": app_id, "environment": cfg["environment"], "account": cfg["account"]})
+    print(json.dumps(rows))
+    return 0
 
 
 def main(argv=None, deps: Deps | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     if deps is None:
-        deps = build_deps(config_mod.load(args.config), args.dry_run, args.command in NEEDS_HEALTH)
+        raw = config_mod.load(args.config)
+        if args.command == "apps":
+            return cmd_apps(raw)
+        try:
+            cfg = config_mod.resolve(raw, args.app)
+        except config_mod.ConfigError as e:
+            print(f"::error::{e}")
+            return 2
+        deps = build_deps(cfg, args.dry_run, args.command in NEEDS_HEALTH)
     try:
         return COMMANDS[args.command](deps, args)
     finally:

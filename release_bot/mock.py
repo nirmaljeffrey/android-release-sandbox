@@ -43,8 +43,8 @@ def _env_int(name: str, default: int) -> int:
     return int(os.environ.get(name) or default)
 
 
-def state_file() -> Path:
-    return Path(os.environ.get("MOCK_STATE_FILE") or ".mock-state/state.json")
+def state_file(app_id: str = "app") -> Path:
+    return Path(os.environ.get("MOCK_STATE_FILE") or f".mock-state/{app_id}.json")
 
 
 def _now() -> datetime:
@@ -59,8 +59,8 @@ def version_code_for(version_name: str) -> int:
 
 
 class MockStore:
-    def __init__(self, path: Path | None = None):
-        self.path = path or state_file()
+    def __init__(self, path: Path | None = None, app_id: str = "app"):
+        self.path = path or state_file(app_id)
         self.data = json.loads(self.path.read_text()) if self.path.exists() else copy.deepcopy(INITIAL)
 
     def save(self) -> None:

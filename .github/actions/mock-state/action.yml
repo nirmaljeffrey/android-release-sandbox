@@ -1,10 +1,13 @@
 name: Mock Play state
 description: >
-  Sandbox only (RELEASE_BOT_MOCK=true). Carries the mock Play track and health
-  data between workflow runs using the Actions cache. A no-op in production.
+  Sandbox only (RELEASE_BOT_MOCK=true). Carries one app's mock Play track and
+  health data between workflow runs using the Actions cache. A no-op in production.
 inputs:
   mode:
     description: restore | save
+    required: true
+  app:
+    description: App id from release-bot.yml
     required: true
 runs:
   using: composite
@@ -12,12 +15,12 @@ runs:
     - if: inputs.mode == 'restore'
       uses: actions/cache/restore@v6
       with:
-        path: .mock-state
-        key: mock-play-state-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .mock-state/${{ inputs.app }}.json
+        key: mock-play-state--${{ inputs.app }}--${{ github.run_id }}-${{ github.run_attempt }}
         # Newest matching cache wins, i.e. the state left by the previous run.
-        restore-keys: mock-play-state-
-    - if: inputs.mode == 'save' && hashFiles('.mock-state/state.json') != ''
+        restore-keys: mock-play-state--${{ inputs.app }}--
+    - if: inputs.mode == 'save' && hashFiles(format('.mock-state/{0}.json', inputs.app)) != ''
       uses: actions/cache/save@v6
       with:
-        path: .mock-state
-        key: mock-play-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+        path: .mock-state/${{ inputs.app }}.json
+        key: mock-play-state--${{ inputs.app }}--${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}

@@ -1,11 +1,16 @@
-# Sandbox only: make the mock health data go bad (or good again), then run the
-# health check right away. Does nothing unless the repo variable
+# Sandbox only: make one app's mock health data go bad (or good again), then run
+# the health check right away. Does nothing unless the repo variable
 # RELEASE_BOT_MOCK is "true". Leave this file out of your production repo.
 name: "Sandbox · Inject incident"
+run-name: "Sandbox · Inject incident${{ inputs.app && format(' · {0}', inputs.app) || '' }}"
 
 on:
   workflow_dispatch:
     inputs:
+      app:
+        description: "App id from release-bot.yml (leave empty if only one app is configured)"
+        required: false
+        type: string
       incident:
         description: "What should the mock health data show?"
         type: choice
@@ -18,12 +23,14 @@ on:
           - none
 
 concurrency:
-  group: android-release
+  group: android-release-${{ inputs.app || 'app' }}
   cancel-in-progress: false
 
 permissions:
   contents: read
+  id-token: write
 
+# Sandbox switches (unset in production). See README → Try it.
 env:
   RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
   MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
@@ -33,26 +40,49 @@ env:
   SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
 
 jobs:
-  inject:
+  resolve:
+    name: Resolve app
     if: vars.RELEASE_BOT_MOCK == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.app.outputs.app }}
+      environment: ${{ steps.app.outputs.environment }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/release-bot-setup
-      - uses: ./.github/actions/mock-state
+      - id: app
+        uses: ./.github/actions/resolve-app
+        with:
+          app: ${{ inputs.app }}
+
+  act:
+    name: ${{ needs.resolve.outputs.app }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.environment }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/release-bot-setup
+
+      - if: env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
         with:
           mode: restore
+          app: ${{ needs.resolve.outputs.app }}
       - name: Inject
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          APP: ${{ needs.resolve.outputs.app }}
           INCIDENT: ${{ inputs.incident }}
-        run: python -m release_bot mock-inject --incident "$INCIDENT"
+        run: python -m release_bot --app "$APP" mock-inject --incident "$INCIDENT"
       - name: Health check now
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          APP: ${{ needs.resolve.outputs.app }}
           INCIDENT: ${{ inputs.incident }}
-        run: python -m release_bot check --trigger "sandbox incident $INCIDENT"
-      - if: always()
+        run: python -m release_bot --app "$APP" check --trigger "sandbox incident $INCIDENT"
+      - if: always() && env.RELEASE_BOT_MOCK == 'true'
         uses: ./.github/actions/mock-state
         with:
           mode: save
+          app: ${{ needs.resolve.outputs.app }}
