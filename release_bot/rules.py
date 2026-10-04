@@ -165,6 +165,8 @@ def evaluate(norm: dict, signals: dict) -> list[Finding]:
     A source that failed produces HOLD (can't prove it's healthy), never HALT."""
     findings = []
     for source, data in signals.items():
+        if not any(r.source == source for r in norm["rules"]):
+            continue  # no rule uses this source: its data (or outage) can't change the decision
         if isinstance(data, Exception):
             findings.append(Finding(source, Level.HOLD, f"could not fetch: {data}"))
             continue

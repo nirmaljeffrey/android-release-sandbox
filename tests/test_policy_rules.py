@@ -231,3 +231,12 @@ def test_thin_data_advances_only_when_team_allows_it(monkeypatch):
     assert advance("checkout-team", 0.01, at(6), thin).play.actions == []        # hold (default)
     monkeypatch.setattr(cli, "_submitted_at", lambda *a: at(8, 18))
     assert advance("growth-team", 0.05, at(11), thin).play.actions == [0.25]     # when_data_is_thin: advance
+
+
+def test_source_without_rules_is_ignored():
+    growth = norm("growth-team")            # rules use play_vitals + crashlytics, not grafana
+    findings = rules.evaluate(growth, {"grafana": RuntimeError("down"),
+                                       "play_vitals": {"new": None, "prev": None}})
+    assert [f.source for f in findings] == ["play-vitals"]   # grafana outage doesn't matter here
+    no_vitals = {**growth, "rules": [r for r in growth["rules"] if r.source != "play_vitals"]}
+    assert rules.evaluate(no_vitals, {"play_vitals": {"new": None, "prev": None}}) == []
