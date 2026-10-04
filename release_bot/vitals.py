@@ -41,8 +41,8 @@ class Vitals:
         """{versionCode: {"distinctUsers", "userPerceivedCrashRate", "userPerceivedAnrRate"}} for the freshest day."""
         out: dict[int, dict] = {}
         sets = [
-            (self.svc.vitals().crashrate(), "crashRateMetricSet", ["userPerceivedCrashRate", "distinctUsers"]),
-            (self.svc.vitals().anrrate(), "anrRateMetricSet", ["userPerceivedAnrRate"]),
+            (self.svc.vitals().crashrate(), "crashRateMetricSet", ["userPerceivedCrashRate", "crashRate", "distinctUsers"]),
+            (self.svc.vitals().anrrate(), "anrRateMetricSet", ["userPerceivedAnrRate", "anrRate"]),
         ]
         for resource, set_name, metrics in sets:
             name = f"apps/{self.package}/{set_name}"

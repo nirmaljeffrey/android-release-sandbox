@@ -82,6 +82,13 @@ class MockStore:
         return live.get("userFraction", 0)
 
 
+    def submitted_at(self, code: int | None) -> datetime | None:
+        for t, c, *_ in self.data["history"]:
+            if c == code:
+                return datetime.fromisoformat(t)
+        return None
+
+
 class MockPlay:
     def __init__(self, store: MockStore, dry_run: bool = False):
         self.store = store
