@@ -9,7 +9,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         TextView text = new TextView(this);
-        text.setText("Release sandbox " + BuildConfigInfo.version(this));
+        text.setText("Hello from the release sandbox " + BuildConfigInfo.version(this));
+        text.setPadding(48, 48, 48, 48);
         setContentView(text);
     }
 }
