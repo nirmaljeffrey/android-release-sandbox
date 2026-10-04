@@ -10,14 +10,14 @@ runs:
   using: composite
   steps:
     - if: inputs.mode == 'restore'
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: .mock-state
         key: mock-play-state-${{ github.run_id }}-${{ github.run_attempt }}
         # Newest matching cache wins, i.e. the state left by the previous run.
         restore-keys: mock-play-state-
     - if: inputs.mode == 'save' && hashFiles('.mock-state/state.json') != ''
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: .mock-state
         key: mock-play-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}

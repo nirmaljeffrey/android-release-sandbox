@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: play-production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/release-bot-setup
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}

@@ -48,7 +48,7 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not a vX.Y.Z tag"; exit 1; }
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/release-bot-setup
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -78,10 +78,10 @@ jobs:
       run:
         working-directory: ${{ vars.ANDROID_PROJECT_DIR || '.' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ inputs.tag }}
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ vars.ANDROID_JAVA_VERSION || '17' }}
@@ -120,7 +120,7 @@ jobs:
           files=($AAB_GLOB)
           [ ${#files[@]} -eq 1 ] || { echo "::error::expected exactly one .aab for '$AAB_GLOB', found ${#files[@]}"; exit 1; }
           cp "${files[0]}" "$RUNNER_TEMP/app-release.aab"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: aab
           path: ${{ runner.temp }}/app-release.aab
@@ -135,7 +135,7 @@ jobs:
     outputs:
       url: ${{ steps.notes.outputs.url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: ./.github/actions/release-bot-setup
@@ -165,7 +165,7 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/release-bot-setup
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -174,7 +174,7 @@ jobs:
         uses: ./.github/actions/mock-state
         with:
           mode: restore
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: aab
           path: ${{ runner.temp }}
