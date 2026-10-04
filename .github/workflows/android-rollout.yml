@@ -26,4 +26,8 @@ jobs:
     with:
       app: ${{ inputs.app || '' }}
       dry_run: ${{ inputs.dry_run || false }}
-    secrets: inherit
+    # Pass secrets by name: `secrets: inherit` only works inside one GitHub organization.
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
+      RELEASE_BOT_REPO_TOKEN: ${{ secrets.RELEASE_BOT_REPO_TOKEN }}

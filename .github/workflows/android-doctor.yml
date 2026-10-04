@@ -18,4 +18,8 @@ jobs:
     uses: vaazh-studios/headless-mobile-release-bot/.github/workflows/rw-doctor.yml@main
     with:
       app: ${{ inputs.app }}
-    secrets: inherit
+    # Pass secrets by name: `secrets: inherit` only works inside one GitHub organization.
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
+      RELEASE_BOT_REPO_TOKEN: ${{ secrets.RELEASE_BOT_REPO_TOKEN }}
