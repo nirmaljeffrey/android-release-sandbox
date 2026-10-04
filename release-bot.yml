@@ -1,0 +1,61 @@
+# SANDBOX configuration (mock mode). Production defaults live in tests/release-bot.test.yml
+# and in the kit's release-bot.yml.
+
+package_name: com.example.sandbox
+timezone: UTC
+tag_pattern: "v*"
+
+play:
+  track: production
+  initial_fraction: 0.02
+  release_notes_language: en-US
+  default_release_notes: "Bug fixes and performance improvements."
+  changes_not_sent_for_review: false
+
+rollout:
+  steps: [0.02, 0.20, 0.50, 1.0]
+  # Sandbox: every day is a rollout day, so each "Rollout step" run moves one
+  # step (the real repo uses monday: 0.20, tuesday: 0.50, wednesday: 1.0).
+  targets:
+    monday: 1.0
+    tuesday: 1.0
+    wednesday: 1.0
+    thursday: 1.0
+    friday: 1.0
+    saturday: 1.0
+    sunday: 1.0
+
+health:
+  min_distinct_users: 1000
+  crashlytics:
+    enabled: true
+    project: mock
+    dataset: mock
+    table: mock
+    lookback_days: 30
+    new_issue_min_users: 25
+  play_vitals:
+    enabled: true
+    halt:
+      user_perceived_crash_rate: 0.0109
+      user_perceived_anr_rate: 0.0047
+    hold:
+      crash_rate_increase_ratio: 1.25
+      anr_rate_increase_ratio: 1.25
+  grafana:
+    enabled: true
+    matchers:
+      - 'team="mobile"'
+    halt_severities: [critical]
+    hold_severities: [warning]
+
+slack:
+  # Set via repo variables SLACK_CHANNEL_ID / SLACK_ANNOUNCE_CHANNEL_ID / SLACK_ALERTS_CHANNEL_ID.
+  channel_id: ""
+  announce_channel_id: ""
+  alerts_channel_id: ""
+  hero_usergroup_id: ""
+
+access:
+  # Unused in mock mode: the on-duty hero comes from the repo variable MOCK_ON_DUTY.
+  release_heroes: {}

@@ -1,0 +1,58 @@
+# Sandbox only: make the mock health data go bad (or good again), then run the
+# health check right away. Does nothing unless the repo variable
+# RELEASE_BOT_MOCK is "true". Leave this file out of your production repo.
+name: "Sandbox · Inject incident"
+
+on:
+  workflow_dispatch:
+    inputs:
+      incident:
+        description: "What should the mock health data show?"
+        type: choice
+        options:
+          - new-crash
+          - anr-regression
+          - anr-over-threshold
+          - grafana-critical
+          - grafana-warning
+          - none
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
+  MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
+  SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+  SLACK_ANNOUNCE_CHANNEL_ID: ${{ vars.SLACK_ANNOUNCE_CHANNEL_ID }}
+  SLACK_ALERTS_CHANNEL_ID: ${{ vars.SLACK_ALERTS_CHANNEL_ID }}
+  SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
+
+jobs:
+  inject:
+    if: vars.RELEASE_BOT_MOCK == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-bot-setup
+      - uses: ./.github/actions/mock-state
+        with:
+          mode: restore
+      - name: Inject
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          INCIDENT: ${{ inputs.incident }}
+        run: python -m release_bot mock-inject --incident "$INCIDENT"
+      - name: Health check now
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          INCIDENT: ${{ inputs.incident }}
+        run: python -m release_bot check --trigger "sandbox incident $INCIDENT"
+      - if: always()
+        uses: ./.github/actions/mock-state
+        with:
+          mode: save

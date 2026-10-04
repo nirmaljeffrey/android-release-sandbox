@@ -1,0 +1,51 @@
+# Big red button. Open to anyone with repo access: stopping a rollout is always safe.
+name: "Android · HALT rollout"
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why? (posted to Slack)"
+        required: true
+        type: string
+
+# Own group so a halt never waits behind a queued rollout step.
+concurrency:
+  group: android-release-halt
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+# Sandbox switches (unset in production). See README → Sandbox.
+env:
+  RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
+  MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
+  SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+  SLACK_ANNOUNCE_CHANNEL_ID: ${{ vars.SLACK_ANNOUNCE_CHANNEL_ID }}
+  SLACK_ALERTS_CHANNEL_ID: ${{ vars.SLACK_ALERTS_CHANNEL_ID }}
+  SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
+
+jobs:
+  halt:
+    runs-on: ubuntu-latest
+    environment: play-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-bot-setup
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - if: env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: restore
+      - env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          REASON: ${{ inputs.reason }}
+        run: python -m release_bot halt --reason "$REASON"
+      - if: always() && env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: save

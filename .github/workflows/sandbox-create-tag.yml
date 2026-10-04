@@ -1,0 +1,26 @@
+# Sandbox only: stands in for your real CI, which already creates release tags.
+name: "Sandbox · Create release tag"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New version, e.g. 1.2.0 (tag v1.2.0 is created on main)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::use X.Y.Z"; exit 1; }
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+          echo "Created v$VERSION — now run 'Android · Submit to Play' with tag v$VERSION" >> "$GITHUB_STEP_SUMMARY"

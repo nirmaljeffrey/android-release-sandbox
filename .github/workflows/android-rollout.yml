@@ -1,0 +1,57 @@
+# Moves the staged rollout one step per run, only when health is green:
+#   Mon → 20%, Tue → 50%, Wed → 100%   (targets live in release-bot.yml)
+# Each run takes ~1 minute: read Play, check health, write Play, exit.
+# Play itself holds the rollout state between runs.
+name: "Android · Rollout step"
+
+on:
+  schedule:
+    - cron: "5,35 * * * *"   # SANDBOX: every 30 min (production: "0 7 * * 1-3")
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Check and report only — change nothing on Play"
+        type: boolean
+        default: false
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+# Sandbox switches (unset in production). See README → Sandbox.
+env:
+  RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
+  MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
+  SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+  SLACK_ANNOUNCE_CHANNEL_ID: ${{ vars.SLACK_ANNOUNCE_CHANNEL_ID }}
+  SLACK_ALERTS_CHANNEL_ID: ${{ vars.SLACK_ALERTS_CHANNEL_ID }}
+  SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
+
+jobs:
+  advance:
+    runs-on: ubuntu-latest
+    environment: play-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-bot-setup
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - if: env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: restore
+      - env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: python -m release_bot $DRY_RUN advance
+      - if: always() && env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: save

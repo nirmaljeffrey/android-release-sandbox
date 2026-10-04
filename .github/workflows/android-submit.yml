@@ -1,0 +1,201 @@
+# Thursday, after the smoke test: the on-duty @android-release-hero runs this
+# from the Actions tab ("Run workflow", branch: main).
+name: "Android · Submit to Play"
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag created by CI, e.g. v4.12.0"
+        required: true
+        type: string
+      whats_new:
+        description: "Play 'What's new' (en-US, max 500 chars). Leave empty for the default text."
+        required: false
+        type: string
+      supersede_unfinished_rollout:
+        description: "Last week's release isn't at 100% yet. Replace it anyway?"
+        type: boolean
+        default: false
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# Sandbox switches (unset in production). See README → Sandbox.
+env:
+  RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
+  MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
+  SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+  SLACK_ANNOUNCE_CHANNEL_ID: ${{ vars.SLACK_ANNOUNCE_CHANNEL_ID }}
+  SLACK_ALERTS_CHANNEL_ID: ${{ vars.SLACK_ALERTS_CHANNEL_ID }}
+  SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
+
+jobs:
+  preflight:
+    name: Release hero + previous rollout check
+    runs-on: ubuntu-latest
+    environment: play-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Validate tag format
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::'$TAG' is not a vX.Y.Z tag"; exit 1; }
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-bot-setup
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - if: env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: restore
+      - name: Only the on-duty @android-release-hero may submit
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: python -m release_bot authorize --actor "$GITHUB_ACTOR"
+      - name: Previous rollout finished?
+        env:
+          FORCE: ${{ inputs.supersede_unfinished_rollout && '--force' || '' }}
+        run: python -m release_bot precheck-submit $FORCE
+
+  build:
+    name: Build signed .aab from tag
+    needs: preflight
+    runs-on: ubuntu-latest
+    # Only the upload key lives here — this job never sees Play credentials.
+    environment: android-signing
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ vars.ANDROID_PROJECT_DIR || '.' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ vars.ANDROID_JAVA_VERSION || '17' }}
+          cache: gradle
+      - name: Build release bundle
+        env:
+          BUNDLE_TASK: ${{ vars.ANDROID_BUNDLE_TASK || ':app:bundleRelease' }}
+          KEYSTORE_B64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+        # android.injected.signing.* signs with the upload key without touching build.gradle.
+        run: |
+          signing=()
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+            signing=(
+              -Pandroid.injected.signing.store.file="$RUNNER_TEMP/upload.jks"
+              -Pandroid.injected.signing.store.password="$STORE_PASSWORD"
+              -Pandroid.injected.signing.key.alias="$KEY_ALIAS"
+              -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+            )
+          elif [ "$RELEASE_BOT_MOCK" = "true" ]; then
+            echo "::warning::No upload keystore configured; building an unsigned bundle (sandbox only)."
+          else
+            echo "::error::ANDROID_UPLOAD_KEYSTORE_BASE64 is not set for the android-signing environment."
+            exit 1
+          fi
+          ./gradlew "$BUNDLE_TASK" --no-daemon "${signing[@]}"
+          rm -f "$RUNNER_TEMP/upload.jks"
+      - name: Locate bundle
+        env:
+          AAB_GLOB: ${{ vars.ANDROID_AAB_GLOB || 'app/build/outputs/bundle/release/*.aab' }}
+        run: |
+          shopt -s nullglob
+          files=($AAB_GLOB)
+          [ ${#files[@]} -eq 1 ] || { echo "::error::expected exactly one .aab for '$AAB_GLOB', found ${#files[@]}"; exit 1; }
+          cp "${files[0]}" "$RUNNER_TEMP/app-release.aab"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aab
+          path: ${{ runner.temp }}/app-release.aab
+          retention-days: 30
+
+  release-notes:
+    name: GitHub release notes
+    needs: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      url: ${{ steps.notes.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/release-bot-setup
+      - id: notes
+        name: Generate notes since the previous tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          prev=$(python -m release_bot previous-tag --tag "$TAG")
+          args=(-f tag_name="$TAG")
+          [ -n "$prev" ] && args+=(-f previous_tag_name="$prev")
+          body=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" "${args[@]}" --jq .body)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes "$body"
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes "$body"
+          fi
+          echo "url=$(gh release view "$TAG" --json url --jq .url)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Upload to Play at initial rollout
+    needs: [build, release-notes]
+    runs-on: ubuntu-latest
+    environment: play-production
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-bot-setup
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - if: env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: restore
+      - uses: actions/download-artifact@v4
+        with:
+          name: aab
+          path: ${{ runner.temp }}
+      - name: Attach .aab to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" "$RUNNER_TEMP/app-release.aab" --clobber
+      - name: Submit to Play
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          WHATS_NEW: ${{ inputs.whats_new }}
+          RELEASE_URL: ${{ needs.release-notes.outputs.url }}
+        run: |
+          python -m release_bot submit \
+            --aab "$RUNNER_TEMP/app-release.aab" \
+            --version "${TAG#v}" \
+            --notes "$WHATS_NEW" \
+            --release-url "$RELEASE_URL"
+      - if: always() && env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: save

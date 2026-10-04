@@ -1,0 +1,14 @@
+# Categories for GitHub's generated release notes (used by "Android · Submit to Play").
+changelog:
+  exclude:
+    labels: [skip-changelog]
+    authors: [dependabot, renovate]
+  categories:
+    - title: ✨ Features
+      labels: [feature, enhancement]
+    - title: 🐛 Fixes
+      labels: [bug, fix]
+    - title: 🧹 Chores
+      labels: [chore, refactor, dependencies]
+    - title: Other changes
+      labels: ["*"]

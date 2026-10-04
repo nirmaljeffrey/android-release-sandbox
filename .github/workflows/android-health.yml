@@ -1,0 +1,61 @@
+# Health gate between rollout steps. Halts automatically on hard signals.
+# Runs every 3 hours, and immediately when Grafana fires a release alert
+# (repository_dispatch type "rollout-alert" — see README).
+name: "Android · Health check"
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # SANDBOX: every 15 min (production: "17 */3 * * *")
+  repository_dispatch:
+    types: [rollout-alert]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Check and report only — change nothing on Play"
+        type: boolean
+        default: false
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+# Sandbox switches (unset in production). See README → Sandbox.
+env:
+  RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
+  MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
+  SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+  SLACK_ANNOUNCE_CHANNEL_ID: ${{ vars.SLACK_ANNOUNCE_CHANNEL_ID }}
+  SLACK_ALERTS_CHANNEL_ID: ${{ vars.SLACK_ALERTS_CHANNEL_ID }}
+  SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: play-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-bot-setup
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - if: env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: restore
+      - env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+          # The webhook payload is only used as a label. The halt decision is
+          # always made from real data, so a forged call can at most run a check.
+          TRIGGER: ${{ github.event_name == 'repository_dispatch' && format('Grafana alert {0}', github.event.client_payload.alertname) || '' }}
+        run: python -m release_bot $DRY_RUN check --trigger "$TRIGGER"
+      - if: always() && env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: save

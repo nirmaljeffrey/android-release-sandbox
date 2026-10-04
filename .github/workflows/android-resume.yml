@@ -1,0 +1,55 @@
+# Resume a halted rollout at the same percentage. Release hero only; the bot
+# never resumes on its own.
+name: "Android · Resume rollout"
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why is it safe to continue? (posted to Slack)"
+        required: true
+        type: string
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+# Sandbox switches (unset in production). See README → Sandbox.
+env:
+  RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
+  MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
+  SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
+  SLACK_ANNOUNCE_CHANNEL_ID: ${{ vars.SLACK_ANNOUNCE_CHANNEL_ID }}
+  SLACK_ALERTS_CHANNEL_ID: ${{ vars.SLACK_ALERTS_CHANNEL_ID }}
+  SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
+
+jobs:
+  resume:
+    runs-on: ubuntu-latest
+    environment: play-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-bot-setup
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - if: env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: restore
+      - name: Only the on-duty @android-release-hero may resume
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: python -m release_bot authorize --actor "$GITHUB_ACTOR"
+      - env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          REASON: ${{ inputs.reason }}
+        run: python -m release_bot resume --reason "$REASON"
+      - if: always() && env.RELEASE_BOT_MOCK == 'true'
+        uses: ./.github/actions/mock-state
+        with:
+          mode: save

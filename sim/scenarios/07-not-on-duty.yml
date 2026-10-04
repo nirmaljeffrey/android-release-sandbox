@@ -1,0 +1,11 @@
+title: Someone who isn't the release hero tries to submit
+description: octocat is mapped in release-bot.yml but isn't in @android-release-hero this week. The submit workflow stops at the first step; nothing reaches Play.
+previous_release: {name: "4.11.0", version_code: 41100, status: completed}
+new_release: {tag: v4.12.0, version_code: 41200}
+submit_actor: octocat
+daily_users: 100000
+baseline: {crash: 0.0040, anr: 0.0020}   # previous version (fractions: 0.004 = 0.40%)
+vitals_lag_hours: 36
+on_duty: [U0SOMEONEELSE]
+review_hours: 8
+expect: {submit_ok: false, final_status: not_released}

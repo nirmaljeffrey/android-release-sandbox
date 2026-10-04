@@ -1,0 +1,11 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+.venv/
+__pycache__/
+.pytest_cache/
+sim/out/
+.mock-state/

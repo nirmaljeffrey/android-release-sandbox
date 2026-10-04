@@ -1,0 +1,75 @@
+# Release bot configuration. Changes here go through PR review like any other code.
+
+package_name: com.example.app
+# Used to decide "which weekday is it" for rollout steps. Cron schedules in the
+# workflows are UTC — keep them in sync with this.
+timezone: Europe/Berlin
+# Tags your CI already creates. Used to find the previous tag for release notes.
+tag_pattern: "v*"
+
+play:
+  track: production
+  initial_fraction: 0.02          # Thursday submit → 2% once Google approves
+  release_notes_language: en-US
+  default_release_notes: "Bug fixes and performance improvements."
+  # Leave false unless Play asks for it (e.g. other changes pending review).
+  changes_not_sent_for_review: false
+
+rollout:
+  # The bot moves at most ONE step per run, so a held day just shifts the
+  # schedule instead of jumping 2% → 50%.
+  steps: [0.02, 0.20, 0.50, 1.0]
+  targets:                        # weekday → highest fraction allowed that day
+    monday: 0.20
+    tuesday: 0.50
+    wednesday: 1.0
+
+health:
+  # Below this many daily users on the new version (Play Vitals), the data is
+  # too noisy to judge. Advancing waits; halting still happens on hard signals.
+  min_distinct_users: 1000
+
+  crashlytics:
+    enabled: true
+    project: my-firebase-project
+    dataset: firebase_crashlytics
+    table: com_example_app_ANDROID_REALTIME   # streaming export table
+    lookback_days: 30
+    # A fatal crash group that first appears in this build and hits at least
+    # this many users → HALT.
+    new_issue_min_users: 25
+
+  play_vitals:
+    enabled: true
+    halt:                          # absolute — Google's bad-behaviour lines
+      user_perceived_crash_rate: 0.0109
+      user_perceived_anr_rate: 0.0047
+    hold:                          # relative to the previous version
+      crash_rate_increase_ratio: 1.25
+      anr_rate_increase_ratio: 1.25
+
+  grafana:
+    enabled: true
+    # Alertmanager matchers selecting alerts that matter for the mobile release.
+    matchers:
+      - 'team="mobile"'
+    halt_severities: [critical]
+    hold_severities: [warning]
+
+slack:
+  # Release thread lives here (one thread per version, every bot update).
+  channel_id: C0123456789
+  # Wider group: short announcements — submitted, fully released, halted.
+  announce_channel_id: C0WIDER0000
+  # Your SLO alerts channel: halts and "health needs a human look" go here too.
+  alerts_channel_id: C0SLOALERTS
+  # @android-release-hero. Used to (1) ping on halts and (2) decide who may
+  # submit or resume a release. Find the ID via Slack → user group → Copy ID.
+  hero_usergroup_id: S0123456789
+
+access:
+  # GitHub login → Slack user ID. Only people in this list AND currently in
+  # @android-release-hero may submit or resume. Halting is open to everyone
+  # with access to the repo, because stopping a rollout is always safe.
+  release_heroes:
+    octocat: U0123456789
