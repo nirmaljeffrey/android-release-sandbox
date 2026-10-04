@@ -1,0 +1,21 @@
+# Checks every permission and connection each app needs, with fix-it hints. Read-only.
+name: "Android · Doctor"
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "Only this app (empty = all apps)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  release:
+    uses: vaazh-studios/headless-mobile-release-bot/.github/workflows/rw-doctor.yml@main
+    with:
+      app: ${{ inputs.app }}
+    secrets: inherit

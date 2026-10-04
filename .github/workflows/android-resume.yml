@@ -1,13 +1,11 @@
-# Resume a halted rollout at the same percentage. Release hero only; the bot
-# never resumes on its own.
+# Resume a halted rollout at the same percentage. Release hero only.
 name: "Android · Resume rollout"
-run-name: "Android · Resume rollout${{ inputs.app && format(' · {0}', inputs.app) || '' }}"
 
 on:
   workflow_dispatch:
     inputs:
       app:
-        description: "App id from release-bot.yml (leave empty if only one app is configured)"
+        description: "App id (leave empty if only one app is configured)"
         required: false
         type: string
       reason:
@@ -23,59 +21,10 @@ permissions:
   contents: read
   id-token: write
 
-# Sandbox switches (unset in production). See README → Try it.
-env:
-  RELEASE_BOT_MOCK: ${{ vars.RELEASE_BOT_MOCK }}
-  MOCK_ON_DUTY: ${{ vars.MOCK_ON_DUTY }}
-  SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID }}
-  SLACK_ANNOUNCE_CHANNEL_ID: ${{ vars.SLACK_ANNOUNCE_CHANNEL_ID }}
-  SLACK_ALERTS_CHANNEL_ID: ${{ vars.SLACK_ALERTS_CHANNEL_ID }}
-  SLACK_HERO_USERGROUP_ID: ${{ vars.SLACK_HERO_USERGROUP_ID }}
-
 jobs:
-  resolve:
-    name: Resolve app
-
-    runs-on: ubuntu-latest
-    outputs:
-      app: ${{ steps.app.outputs.app }}
-      environment: ${{ steps.app.outputs.environment }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/release-bot-setup
-      - id: app
-        uses: ./.github/actions/resolve-app
-        with:
-          app: ${{ inputs.app }}
-
-  act:
-    name: ${{ needs.resolve.outputs.app }}
-    needs: resolve
-    runs-on: ubuntu-latest
-    environment: ${{ needs.resolve.outputs.environment }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/release-bot-setup
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-      - if: env.RELEASE_BOT_MOCK == 'true'
-        uses: ./.github/actions/mock-state
-        with:
-          mode: restore
-          app: ${{ needs.resolve.outputs.app }}
-      - name: Only the on-duty @android-release-hero may resume
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          APP: ${{ needs.resolve.outputs.app }}
-        run: python -m release_bot --app "$APP" authorize --actor "$GITHUB_ACTOR"
-      - env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          APP: ${{ needs.resolve.outputs.app }}
-          REASON: ${{ inputs.reason }}
-        run: python -m release_bot --app "$APP" resume --reason "$REASON"
-      - if: always() && env.RELEASE_BOT_MOCK == 'true'
-        uses: ./.github/actions/mock-state
-        with:
-          mode: save
-          app: ${{ needs.resolve.outputs.app }}
+  release:
+    uses: vaazh-studios/headless-mobile-release-bot/.github/workflows/rw-resume.yml@main
+    with:
+      app: ${{ inputs.app }}
+      reason: ${{ inputs.reason }}
+    secrets: inherit
