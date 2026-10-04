@@ -28,8 +28,9 @@ permissions:
 
 jobs:
   release:
-    uses: vaazh-studios/headless-mobile-release-bot/.github/workflows/rw-inject.yml@main
+    uses: vaazh-studios/headless-mobile-release-bot/.github/workflows/rw-inject.yml@quality/contracts-and-mocks
     with:
+      bot_ref: quality/contracts-and-mocks   # TEMP: until PRs #2/#3 merge
       platform: ${{ inputs.platform }}
       app: ${{ inputs.app }}
       incident: ${{ inputs.incident }}

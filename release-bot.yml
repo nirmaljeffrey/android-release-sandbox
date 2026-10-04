@@ -20,6 +20,12 @@ defaults:
       - {name: Warning alert,   source: grafana, severity: warning, action: hold}
   slack: {channel_id: "", announce_channel_id: "", alerts_channel_id: "", hero_usergroup_id: ""}
   access: {release_heroes: {}}
+  # Fake halt actions for the public demo: simulated in mock mode, nothing real is called.
+  notify:
+    pagerduty: {}
+    incident_io: {declare_incident: {severity: Minor}}
+  on_halt:
+    optimizely: {project_id: 1234567, environment: production, flags: [new_checkout]}
 
 accounts:
   vaazh:   {environment: play-vaazh, ios_environment: appstore-vaazh}
