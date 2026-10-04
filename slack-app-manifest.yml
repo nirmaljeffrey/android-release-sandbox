@@ -11,6 +11,7 @@ oauth_config:
     bot:
       - chat:write          # post release threads, announcements, alerts
       - channels:history    # find this release's thread again (public channels)
+      - channels:join       # join public channels by itself, no /invite needed
       - groups:history      # same, for private channels
       - usergroups:read     # who is in @android-release-hero (paid Slack plans only)
 settings:

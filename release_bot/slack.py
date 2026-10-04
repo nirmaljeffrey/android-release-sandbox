@@ -1,7 +1,7 @@
 """Slack: one thread per release, announcements, and the on-duty release hero.
 
 Stateless: a release's thread is found again by a marker in its root message.
-Bot scopes: chat:write, channels:history (groups:history for private), usergroups:read.
+Bot scopes: chat:write, channels:history, channels:join (groups:history for private), usergroups:read.
 """
 
 import requests
@@ -68,7 +68,7 @@ class Slack:
                 return msg["ts"]
         return None
 
-    def _call(self, method: str, get: bool = False, **params) -> dict:
+    def _call(self, method: str, get: bool = False, _joined: bool = False, **params) -> dict:
         # Read methods take query params; chat.postMessage takes a JSON body.
         headers = {"Authorization": f"Bearer {self.token}"}
         if get:
@@ -77,6 +77,10 @@ class Slack:
             resp = self.http.post(f"{API}/{method}", json=params, headers=headers, timeout=30)
         resp.raise_for_status()
         data = resp.json()
+        if not data.get("ok") and data.get("error") == "not_in_channel" and params.get("channel") and not _joined:
+            # Public channel the bot hasn't joined yet: join (channels:join) and retry once.
+            self._call("conversations.join", channel=params["channel"])
+            return self._call(method, get=get, _joined=True, **params)
         if not data.get("ok"):
             raise RuntimeError(f"Slack {method} failed: {data.get('error')}")
         return data
