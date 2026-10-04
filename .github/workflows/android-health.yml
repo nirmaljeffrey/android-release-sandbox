@@ -24,9 +24,8 @@ permissions:
 
 jobs:
   release:
-    uses: vaazh-studios/headless-mobile-release-bot/.github/workflows/rw-health.yml@quality/contracts-and-mocks
+    uses: vaazh-studios/headless-mobile-release-bot/.github/workflows/rw-health.yml@main
     with:
-      bot_ref: quality/contracts-and-mocks   # TEMP: until PRs #2/#3 merge
       app: ${{ inputs.app || '' }}
       dry_run: ${{ inputs.dry_run || false }}
     # Pass secrets by name: `secrets: inherit` only works inside one GitHub organization.
