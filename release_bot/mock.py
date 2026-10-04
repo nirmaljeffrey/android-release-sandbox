@@ -16,7 +16,7 @@ from release_bot.play import TrackState
 
 
 INITIAL = {
-    "releases": [{"name": "1.0.0", "versionCodes": ["10000"], "status": "completed"}],
+    "releases": [{"name": "0.1.0", "versionCodes": ["100"], "status": "completed"}],
     "history": [],          # [iso_time, version_code, status, fraction]
     "approved_at": None,    # when mock Google review finishes for the live release
     "incident": "none",
@@ -92,6 +92,10 @@ class MockPlay:
 
     def upload_and_start(self, aab_path, version_name, fraction, notes, language) -> int:
         code = version_code_for(version_name)
+        current = TrackState.version_code(self.store.track.completed) or 0
+        if code <= current:
+            # Same rule as Play: a new release needs a higher versionCode.
+            raise RuntimeError(f"versionCode {code} ({version_name}) must be higher than the live {current}")
         if self.dry_run:
             print(f"[dry-run] would upload {version_name} ({code}) at {fraction:.0%}")
             return code

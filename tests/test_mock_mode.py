@@ -74,3 +74,12 @@ def test_full_week_in_mock_mode(sandbox):
 def test_precheck_blocks_second_submit_while_rolling_out(sandbox):
     sandbox("submit", "--aab", "x.aab", "--version", "4.12.0")
     assert sandbox("precheck-submit") == 1
+
+
+def test_mock_play_rejects_non_increasing_version(sandbox):
+    sandbox("submit", "--aab", "x.aab", "--version", "4.12.0")
+    sandbox.advance_time(minutes=10)
+    for _ in range(3):
+        sandbox("advance"); sandbox.advance_time(days=1)
+    with pytest.raises(RuntimeError, match="must be higher"):
+        sandbox("submit", "--aab", "x.aab", "--version", "4.12.0")
