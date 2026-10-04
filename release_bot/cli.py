@@ -152,6 +152,18 @@ def cmd_precheck_submit(deps: Deps, args) -> int:
     return 0
 
 
+DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def plan_text(cfg: dict) -> str:
+    """Human summary of the rollout plan, e.g. '20% Mon → 50% Tue → 100% Wed'."""
+    targets = cfg["rollout"]["targets"]
+    if len(targets) == 7 and len(set(targets.values())) == 1:
+        return "one step per rollout run"
+    by_day = sorted(targets.items(), key=lambda kv: DAYS.index(kv[0]))
+    return " → ".join(f"{f:.0%} {day[:3].title()}" for day, f in by_day)
+
+
 def cmd_submit(deps: Deps, args) -> int:
     p = deps.cfg["play"]
     notes = (args.notes or "").strip() or p["default_release_notes"]
@@ -161,9 +173,10 @@ def cmd_submit(deps: Deps, args) -> int:
             f"Rollout starts at {fraction:.0%} once Google approves.")
     if args.release_url:
         root += f"\nRelease notes: {args.release_url}"
-    deps.slack.post(args.version, "Submitted. I'll check health every 3h and step the rollout Mon/Tue/Wed.", root_text=root)
+    plan = plan_text(deps.cfg)
+    deps.slack.post(args.version, f"Submitted. I'll keep checking health and step the rollout: {plan}.", root_text=root)
     _announce(deps, f"📦 Android *{args.version}* is in Play review. Staged rollout: "
-                    f"{fraction:.0%} after approval → 20% Mon → 50% Tue → 100% Wed.")
+                    f"{fraction:.0%} after approval → {plan}.")
     return 0
 
 
