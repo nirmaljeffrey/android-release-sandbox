@@ -1,11 +1,16 @@
 # Release day, after the smoke test: the on-duty @android-release-hero runs this
 # from the Actions tab ("Run workflow", branch: main).
-name: "Android · Submit to Play"
+name: "Release · Submit to the store"
 run-name: "Submit ${{ inputs.app && format('{0} ', inputs.app) || '' }}${{ inputs.tag }}"
 
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        description: "android or ios"
+        type: choice
+        options: [android, ios]
+        default: android
       app:
         description: "App id from release-bot.yml (leave empty if only one app is configured)"
         required: false
@@ -24,7 +29,7 @@ on:
         default: false
 
 concurrency:
-  group: android-release-${{ inputs.app || 'app' }}
+  group: android-release-${{ inputs.app || 'app' }}${{ inputs.platform == 'ios' && '-ios' || '' }}
   cancel-in-progress: false
 
 permissions:
@@ -35,6 +40,7 @@ jobs:
   release:
     uses: vaazh-studios/headless-mobile-release-bot/.github/workflows/rw-submit.yml@main
     with:
+      platform: ${{ inputs.platform }}
       app: ${{ inputs.app }}
       tag: ${{ inputs.tag }}
       whats_new: ${{ inputs.whats_new }}
@@ -44,6 +50,9 @@ jobs:
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
       RELEASE_BOT_REPO_TOKEN: ${{ secrets.RELEASE_BOT_REPO_TOKEN }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
       ANDROID_UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
       ANDROID_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
       ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}

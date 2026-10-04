@@ -22,7 +22,7 @@ defaults:
   access: {release_heroes: {}}
 
 accounts:
-  vaazh:   {environment: play-vaazh}
+  vaazh:   {environment: play-vaazh, ios_environment: appstore-vaazh}
   partner: {environment: play-partner}
 
 apps:

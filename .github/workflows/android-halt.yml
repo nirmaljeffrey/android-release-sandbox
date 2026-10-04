@@ -4,6 +4,11 @@ name: "Android · HALT rollout"
 on:
   workflow_dispatch:
     inputs:
+      platform:
+        description: "android or ios"
+        type: choice
+        options: [android, ios]
+        default: android
       app:
         description: "App id (leave empty if only one app is configured)"
         required: false
@@ -15,7 +20,7 @@ on:
 
 # Own queue so a halt never waits behind a queued rollout step.
 concurrency:
-  group: android-release-halt-${{ inputs.app || 'app' }}
+  group: android-release-halt-${{ inputs.app || 'app' }}${{ inputs.platform == 'ios' && '-ios' || '' }}
   cancel-in-progress: false
 
 permissions:
@@ -26,6 +31,7 @@ jobs:
   release:
     uses: vaazh-studios/headless-mobile-release-bot/.github/workflows/rw-halt.yml@main
     with:
+      platform: ${{ inputs.platform }}
       app: ${{ inputs.app }}
       reason: ${{ inputs.reason }}
     # Pass secrets by name: `secrets: inherit` only works inside one GitHub organization.
@@ -33,3 +39,6 @@ jobs:
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       GRAFANA_TOKEN: ${{ secrets.GRAFANA_TOKEN }}
       RELEASE_BOT_REPO_TOKEN: ${{ secrets.RELEASE_BOT_REPO_TOKEN }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
