@@ -17,7 +17,7 @@ on:
       incident:
         description: "What should the mock health data show?"
         type: choice
-        options: [new-crash, anr-regression, anr-over-threshold, grafana-critical, grafana-warning, datadog-alert, datadog-warn, none]
+        options: [new-crash, anr-regression, anr-over-threshold, grafana-critical, grafana-warning, datadog-alert, datadog-warn, play-rejected, play-awaiting-publish, none]
 
 concurrency:
   group: android-release-${{ inputs.app || 'app' }}${{ inputs.platform == 'ios' && '-ios' || '' }}
