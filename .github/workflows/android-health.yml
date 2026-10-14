@@ -21,6 +21,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  actions: read      # lets the watchdog spot runs stuck in the queue
 
 jobs:
   release:
